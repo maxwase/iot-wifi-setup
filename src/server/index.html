@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <form method="post" action="/wifi_select" enctype="application/x-www-form-urlencoded">
+        <p><label><b>Choose your Wi-Fi net for ESP32: </b></label></p>
+
+        <p>
+            <label>
+                Wi-Fi name (SSID):
+                <select name="ssid">
+                    {}
+                </select>
+            </label>
+        </p>
+        <p><label>Password: <input type="password" pattern=".{{8,}}" required title="8 characters minimum" name="password"></label></p>
+
+        <p><input type="submit" value="Submit"></p>
+    </form>
+</body>
+
+</html>

@@ -1,0 +1,25 @@
+[package]
+name = "esp-wifi-web-setup"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+embedded-svc = { version = "0.24.0" }
+esp-idf-hal = "0.40.1"
+esp-idf-svc = { version = "0.45.0", features = ["experimental", "alloc", "std", "nightly"] }
+embedded-io = "0.4.0"
+esp-idf-sys = { version = "0.32.1", features = ["binstart"] }
+log = "0.4.17"
+serde = "1.0.143"
+serde_json = "1.0.83"
+thiserror = "1.0.32"
+heapless = "0.7.16"
+parking_lot = "0.12.1"
+serde_urlencoded = "0.7.1"
+time = { version = "0.3.17", features = ["macros", "formatting", "parsing"] }
+
+[build-dependencies]
+anyhow = "1.0.68"
+embuild = "0.31.0"
