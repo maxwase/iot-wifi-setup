@@ -5,6 +5,5 @@ As a connection test, the app fetches UTC time once in 5 secs.
 
 ## Build & Flash
 ```sh
-cargo build --release
-espflash /dev/ttyUSB0 target/riscv32imc-esp-espidf/release/esp-wifi-web-setup --monitor
+cargo run --release
 ```

@@ -1,30 +1,17 @@
 use embedded_svc::io::Read;
-use esp_idf_svc::http::client;
-use esp_idf_sys::EspError;
+use esp_idf_svc::{http::client, sys::EspError};
 use log::trace;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Failed to setup HTTP client: {0}")]
-    HttpClientSetup(#[source] EspError),
-
-    #[error("Failed to read response: nothing to read")]
-    EmptyResponse,
-}
 
 /// Sets up ESP HTTPS client.
-pub fn setup_https_client() -> Result<client::EspHttpConnection, Error> {
+pub fn setup_https_client() -> Result<client::EspHttpConnection, EspError> {
     client::EspHttpConnection::new(&client::Configuration {
-        crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
+        crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         ..Default::default()
     })
-    .map_err(Error::HttpClientSetup)
 }
 
-/// Reads all bytes from the response and returns them without trailing bytes.
-/// This function does not handle interrupted error due to the fact that [embedded_io::ErrorKind] contains only [embedded_io::ErrorKind::Other] kind.
-pub fn read_response<R: Read>(response: &mut R, buf: &mut Vec<u8>) -> Result<usize, Error> {
+/// Reads all bytes from the response and returns them without trailing bytes, returns [None] if the response is empty.
+pub fn read_response<R: Read>(response: &mut R, buf: &mut Vec<u8>) -> Option<usize> {
     let mut total_bytes_read = 0;
 
     while let Ok(bytes_read) = response.read(&mut buf[total_bytes_read..]) {
@@ -38,11 +25,11 @@ pub fn read_response<R: Read>(response: &mut R, buf: &mut Vec<u8>) -> Result<usi
     }
 
     if total_bytes_read == 0 {
-        return Err(Error::EmptyResponse);
+        return None;
     }
 
     trace!("Truncate {} bytes", buf.len() - total_bytes_read);
     buf.truncate(total_bytes_read);
 
-    Ok(total_bytes_read)
+    Some(total_bytes_read)
 }

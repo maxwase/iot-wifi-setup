@@ -1,33 +1,30 @@
-use std::time::Duration;
-
-use embedded_svc::wifi::{Configuration, Wifi};
+use embedded_svc::wifi::Configuration;
+use esp_idf_hal::modem::Modem;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    netif::{EspNetif, EspNetifWait},
-    wifi::{EspWifi, WifiWait},
+    nvs::EspDefaultNvsPartition,
+    sys::EspError,
+    wifi::{AccessPointConfiguration, AccessPointInfo, BlockingWifi, ClientConfiguration, EspWifi},
 };
-use esp_idf_sys::EspError;
-use log::{error, trace};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Failed to set up ESP WiFi {0}")]
+    #[error("Failed to set up ESP WiFi")]
     Setup(#[source] EspError),
-    #[error("Failed to scan WiFi {0}")]
+    #[error("Failed to wrap ESP WiFi")]
+    Wrap(#[source] EspError),
+    #[error("Failed to scan WiFi")]
     Scan(#[source] EspError),
-    #[error("Failed to start WiFi {0}")]
+    #[error("Failed to start WiFi")]
     Start(#[source] EspError),
-    #[error("Failed to connect to WiFi {0}")]
+    #[error("Failed to connect to WiFi")]
     Connect(#[source] EspError),
-    #[error("Failed to wait WiFi set up {0}")]
+    #[error("Failed to wait WiFi set up")]
     Wait(#[source] EspError),
-    #[error("WiFi did not start")]
-    WaitStart,
-    #[error("WiFi did not connect")]
-    WaitConnect,
-    #[error("Failed to configure ESP WiFI {0}")]
+    #[error("Failed to configure ESP WiFI")]
     Configuration(#[source] EspError),
 }
 
@@ -36,61 +33,66 @@ type Password = heapless::String<64>;
 
 #[derive(Deserialize, Clone)]
 pub struct Credentials {
-    ssid: String,
-    password: String,
+    ssid: Ssid,
+    password: Password,
 }
 
-impl Credentials {
-    pub fn ssid(&self) -> Ssid {
-        self.ssid.as_str().into()
-    }
-
-    pub fn password(&self) -> Password {
-        self.password.as_str().into()
+impl From<Credentials> for ClientConfiguration {
+    fn from(Credentials { ssid, password }: Credentials) -> Self {
+        ClientConfiguration {
+            ssid,
+            password,
+            ..Default::default()
+        }
     }
 }
 
-/// Setup wifi configuration.
-pub fn set_wifi_configuration(
-    wifi: &mut EspWifi,
-    sys_loop: &EspSystemEventLoop,
-    configuration: Configuration,
-) -> Result<(), Error> {
-    wifi.set_configuration(&configuration)
-        .map_err(Error::Configuration)?;
-    wifi.start().map_err(Error::Start)?;
+/// A wrapper over [BlockingWifi] to use in the setup-server handler.
+pub struct WifiWrapper<'a>(Mutex<BlockingWifi<EspWifi<'a>>>);
 
-    if !WifiWait::new(sys_loop)
-        .map_err(Error::Wait)?
-        .wait_with_timeout(Duration::from_secs(20), || {
-            wifi.is_started().unwrap_or_default()
-        })
-    {
-        return Err(Error::WaitStart);
+impl<'a> WifiWrapper<'a> {
+    pub fn new(
+        modem: Modem,
+        sys_loop: EspSystemEventLoop,
+        nvs: EspDefaultNvsPartition,
+    ) -> Result<Self, Error> {
+        let wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs)).map_err(Error::Setup)?;
+        let wifi = BlockingWifi::wrap(wifi, sys_loop.clone()).map_err(Error::Wrap)?;
+        Ok(Self(parking_lot::Mutex::new(wifi)))
     }
 
-    trace!("Wifi started");
-    // nowhere to connect
-    if let Configuration::AccessPoint(_) = configuration {
-        return Ok(());
+    /// Configures the modem to host the server and scan for networks.
+    pub fn use_setup_configuration(&self) -> Result<(), Error> {
+        // Wi-Fi scan is not impossible to scan in the Access Point mode, that's why we need
+        // to connect in a client mode as well, even though we are not planning to connect
+        let config = Configuration::Mixed(
+            Default::default(),
+            AccessPointConfiguration {
+                ssid: "UTC-Fetcher-Setup".try_into().expect("Short SSID name"),
+                ..Default::default()
+            },
+        );
+        let mut wifi = self.0.lock();
+        wifi.set_configuration(&config)
+            .map_err(Error::Configuration)?;
+
+        wifi.start().map_err(Error::Start)
     }
 
-    wifi.connect().map_err(Error::Connect)?;
+    /// Connects the board to the SSID with the provided [Credentials].
+    pub fn use_client_configuration(&self, credentials: Credentials) -> Result<(), Error> {
+        let config = Configuration::Client(credentials.into());
 
-    if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), sys_loop)
-        .map_err(Error::Wait)?
-        .wait_with_timeout(Duration::from_secs(20), || {
-            wifi.is_connected().unwrap_or_default()
-                && wifi
-                    .sta_netif()
-                    .get_ip_info()
-                    .map(|info| !info.ip.is_unspecified())
-                    .unwrap_or_default()
-        })
-    {
-        return Err(Error::WaitConnect);
+        let mut wifi = self.0.lock();
+        wifi.set_configuration(&config)
+            .map_err(Error::Configuration)?;
+
+        wifi.connect().map_err(Error::Connect)?;
+        wifi.wait_netif_up().map_err(Error::Wait)
     }
 
-    trace!("Wifi connected");
-    Ok(())
+    /// Scans the network
+    pub fn scan(&self) -> Result<Vec<AccessPointInfo>, Error> {
+        self.0.lock().scan().map_err(Error::Scan)
+    }
 }
